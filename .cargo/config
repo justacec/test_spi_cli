@@ -1,0 +1,9 @@
+[target.armv7-unknown-linux-gnueabihf]
+linker = "armv8-rpi4-linux-gnueabihf-gcc"
+
+[build]
+target = "armv7-unknown-linux-gnueabihf"
+
+#[target]
+#default = "armv7-unknown-linux-gnueabihf"
+
