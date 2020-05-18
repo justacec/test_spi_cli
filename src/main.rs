@@ -212,6 +212,10 @@ impl SPIChannel {
                 match d {
                     Ok(msg_data) => {
                         // Send it on the SPI device
+
+                        // Need to out in code to ensure the MCU is in waiting for command code here
+                        // Just a check to the SPI Busy pin would do.
+
                         {
                             let mut spi_guard = spi.lock().unwrap();
                             spi_guard.write(&msg_data).unwrap();
