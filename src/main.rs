@@ -41,6 +41,8 @@ use spmc;
 use spmc::{Sender, Receiver};
 use std::io::{Write, Read};
 use rand::Rng;
+use std::thread::sleep;
+use std::time::Duration;
 
 pub struct SPICommand {
     creation_time: DateTime<Utc>,
@@ -205,6 +207,7 @@ impl SPIChannel {
 
         let a = self.tx_queue_consumer.clone();
         let spi = self.spidev.clone();
+        let bsy = self.bsy.clone();
 
         thread::spawn(move || {
             loop {
@@ -214,8 +217,14 @@ impl SPIChannel {
                     Ok(msg_data) => {
                         // Send it on the SPI device
 
-                        // Need to out in code to ensure the MCU is in waiting for command code here
-                        // Just a check to the SPI Busy pin would do.
+                        // This is a cheep hackinsh way to wait for the right time to send a message
+                        loop {
+                            let val = bsy.get_value().unwrap();
+                            if val == 0 {
+                                break;
+                            }
+                            sleep(Duration::from_millis(10));
+                        }
 
                         {
                             let mut spi_guard = spi.lock().unwrap();
@@ -282,9 +291,14 @@ impl SPIChannel {
     }
 
     fn receive_response(&mut self, id: u16, data: Vec<u8>) {
-        let index = self.commands.iter().position(|r| r.id == id).unwrap();
-        self.commands[index].response_time = Some(Utc::now());
-        self.commands[index].response = Some(data);
+        match self.commands.iter().position(|r| r.id == id) {
+            Some(index) => {
+                self.commands[index].response_time = Some(Utc::now());
+                self.commands[index].response = Some(data);        
+            },
+            None => {}
+        }
+
     }
 }
 
@@ -294,7 +308,6 @@ static SPI: Lazy<Mutex<SPIChannel>> = Lazy::new(|| {
 
 pub struct StatefulTable {
     state: TableState,
-//    items: Vec<Vec<&'a str>>,
     items: Vec<Vec<String>>,
 }
 
