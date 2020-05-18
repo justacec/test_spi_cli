@@ -40,6 +40,7 @@ use hex::encode;
 use spmc;
 use spmc::{Sender, Receiver};
 use std::io::{Write, Read};
+use rand::Rng;
 
 pub struct SPICommand {
     creation_time: DateTime<Utc>,
@@ -342,6 +343,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let events = Events::new();
 
+    let mut rng = rand::thread_rng();
+
     // Setup the data ready inturrupt
     {
         SPI.lock().unwrap().start_inturrupt();
@@ -411,8 +414,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 Key::Char('r') => {
                     {
-                        let mut SPI_guard = SPI.lock().unwrap();
-                        SPI_guard.process_rx();    
+                        let n = rng.gen_range(1, 10);
+                        for i in 1..n {
+                            let length = rng.gen_range(0, 20);
+                            let data = (0..length).map(|_| {
+                                rng.gen_range(0, 255)
+                            }).collect();
+                            last_command_id += 1;
+                            let cmd = SPICommand::new(last_command_id, 1, data);
+
+                            {
+                                let mut SPI_guard = SPI.lock().unwrap();
+                                SPI_guard.send_command(cmd);            
+                            }
+                        }
                     }
                 }
                 Key::Char('s') => {
