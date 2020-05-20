@@ -219,10 +219,10 @@ impl SPIChannel {
 
                         // This is a cheep hackinsh way to wait for the right time to send a message
                         loop {
-                            let val = bsy.get_value().unwrap();
-                            if val == 0 {
+                            if bsy.get_value().unwrap() == 0 {
                                 break;
                             }
+                            println!("Waiting!\n");
                             sleep(Duration::from_millis(10));
                         }
 
@@ -249,7 +249,7 @@ impl SPIChannel {
     fn process_rx(&mut self) {
         let spi = self.spidev.clone();
         thread::spawn(move || {
-            // Do a 2 byte read from the SPI port
+            // Do a 4 byte read from the SPI port
             let mut incomming_raw= [0u8; 4];
             {
                 let mut spi_guard = spi.lock().unwrap();
@@ -427,9 +427,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 Key::Char('r') => {
                     {
-                        let n = rng.gen_range(1, 10);
-                        for i in 1..n {
-                            let length = rng.gen_range(0, 20);
+//                        let n = rng.gen_range(1, 10);
+                        let n = 3;
+                        for i in 0..n {
+                            let length = rng.gen_range(0, 5);
                             let data = (0..length).map(|_| {
                                 rng.gen_range(0, 255)
                             }).collect();
