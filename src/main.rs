@@ -230,6 +230,9 @@ impl SPIChannel {
                             let mut spi_guard = spi.lock().unwrap();
                             spi_guard.write(&msg_data).unwrap();
                         }
+
+                        // Put in a wait between messages to give MCU time to think
+                        sleep(Duration::from_micros(100));
                     },
                     Err(_) => {
                         break;
