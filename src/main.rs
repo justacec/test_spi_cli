@@ -16,34 +16,30 @@ use std::vec::Vec;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::fmt;
-use std::thread::JoinHandle;
 use byte::ctx::*;
-use byte::{BytesExt, TryWrite, LE};
+use byte::{BytesExt, LE};
 
 use std::{error::Error, io};
-use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
+use termion::{event::Key, raw::IntoRawMode};
 use tui::{
     backend::TermionBackend,
     layout::{Constraint, Layout},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     widgets::{Block, Borders, Row, Table, TableState, List, ListState, Text, Paragraph},
     Terminal,
     
 };
-use chrono::{DateTime, Local, Utc};
-use bbqueue::{BBBuffer, ConstBBBuffer,
-    framed::{FrameConsumer, FrameProducer, FrameGrantW, FrameGrantR}, 
-    consts::*};
+use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use linux_embedded_hal::{
     spidev::{Spidev, SpidevOptions, SpiModeFlags},
-    sysfs_gpio::{Pin, Direction, Edge}
+    sysfs_gpio::{Pin, Edge}
 };
-use hex::encode;
 use spmc;
 use spmc::{Sender, Receiver};
 use std::io::{Write, Read};
 use rand::Rng;
+use rand_distr::{Distribution, LogNormal};
 use std::thread::sleep;
 use time::Duration;
 
@@ -457,8 +453,51 @@ fn main() -> Result<(), Box<dyn Error>> {
         SPI.lock().unwrap().start_inturrupt();
     }
 
-//    let mut table = StatefulTable::new();
-    let mut last_command_id = 0u16;
+    let last_command_id = Arc::new(Mutex::new(0u16));
+
+    // Code for seperate thread to generate random events
+    let random_event_generator_status: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    let reg = random_event_generator_status.clone();
+    let last_command_id_thread = last_command_id.clone();
+    thread::spawn(move || {
+        let mut internal_rng = rand::thread_rng();
+
+        // Approximatly a frequency of 60Hz with a variations that go from 30Hz to 100Hz
+        let ln = LogNormal::new(-4.094, 0.2).unwrap();
+
+        loop {
+            let val = { *reg.lock().unwrap() };
+            match val {
+                true => {
+                    // Sleep for a random amount
+                    let sleep_time = ln.sample(&mut internal_rng) * 1e6;
+                    sleep(std::time::Duration::try_from(Duration::microseconds(sleep_time as i64)).unwrap());
+
+                    // Generate random message
+                    let length = internal_rng.gen_range(0, 10);
+                    let data = (0..length).map(|_| {
+                        internal_rng.gen_range(0, 255)
+                    }).collect();
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id_thread.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let cmd = SPICommand::new(cmd_id, 1, data);
+
+                    {
+                        let mut SPI_guard = SPI.lock().unwrap();
+                        SPI_guard.send_command(cmd);            
+                    }
+                },
+                // Here we just wait till there is something to do...
+                false => {
+                    sleep(std::time::Duration::try_from(Duration::microseconds(100)).unwrap());
+                }
+    
+            }
+        }
+    });
 
     loop {
         terminal.draw(|mut f| {
@@ -475,7 +514,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             )
             .split(f.size());
 
-            let texts = [Text::raw("s: Single preformatted echo command          r: Random number of random echo commands")];
+            let texts = [Text::raw(format!("s: Single preformatted echo command          r: Single Shot of Random number of random echo commands        t: Toggle Random Event Generation {}",
+                match *random_event_generator_status.lock().unwrap() {
+                    true => { "Running" },
+                    false => { "Not Running" }
+                }
+            ))];
             let paragraph = Paragraph::new(
                 texts.iter())
                 .block(Block::default().borders(Borders::ALL).title("Hotkeys"));
@@ -521,8 +565,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             let mut ts = TableState::default();
             ts.select(Some(rows.len()));
+            let title = &format!("Unanswered Commands [{}]", rows.len())[..];
             let t = Table::new(header.iter(), rows.into_iter())
-                .block(Block::default().borders(Borders::ALL).title("Unanswered Commands"))
+                .block(Block::default().borders(Borders::ALL).title(title))
                 .widths(&[
                     Constraint::Length(20),
                     Constraint::Length(6),
@@ -538,8 +583,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             let mut ts = TableState::default();
             ts.select(Some(rows_completed.len()));
+            let title = &format!("Completed Commands [{}]", rows_completed.len())[..];
             let t = Table::new(header.iter(), rows_completed.into_iter())
-                .block(Block::default().borders(Borders::ALL).title("Completed Commands"))
+                .block(Block::default().borders(Borders::ALL).title(title))
                 .widths(&[
                     Constraint::Length(20),
                     Constraint::Length(6),
@@ -580,7 +626,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Event::Input(key) => match key {
                 Key::Char('q') => {
                     break;
-                }
+                },
                 Key::Char('r') => {
                     {
                         let n = rng.gen_range(1, 10);
@@ -589,8 +635,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                             let data = (0..length).map(|_| {
                                 rng.gen_range(0, 255)
                             }).collect();
-                            last_command_id += 1;
-                            let cmd = SPICommand::new(last_command_id, 1, data);
+                            let cmd_id: u16= {
+                                let mut tmp = last_command_id.lock().unwrap();
+                                *tmp += 1;
+                                *tmp
+                            };
+                            let cmd = SPICommand::new(cmd_id, 1, data);
 
                             {
                                 let mut SPI_guard = SPI.lock().unwrap();
@@ -598,15 +648,23 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                         }
                     }
-                }
+                },
                 Key::Char('s') => {
 
-                    last_command_id += 1;
-                    let cmd = SPICommand::new(last_command_id, 1, vec![0, 1, 2, 3, 4, 5]);
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let cmd = SPICommand::new(cmd_id, 1, vec![0, 1, 2, 3, 4, 5]);
 
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
-                }
+                },
+                Key::Char('t') => {
+                    let mut tmp = random_event_generator_status.lock().unwrap();
+                    *tmp = !*tmp;
+                },
                 _ => {}
             },
             _ => {}
