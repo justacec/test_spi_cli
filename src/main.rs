@@ -10,10 +10,12 @@ extern crate chrono;
 mod util;
 use crate::util::event::{Event, Events};
 
+use core::convert::TryFrom;
 use std::fmt::Debug;
 use std::vec::Vec;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::fmt;
 use std::thread::JoinHandle;
 use byte::ctx::*;
 use byte::{BytesExt, TryWrite, LE};
@@ -24,8 +26,9 @@ use tui::{
     backend::TermionBackend,
     layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Row, Table, TableState},
+    widgets::{Block, Borders, Row, Table, TableState, List, ListState, Text, Paragraph},
     Terminal,
+    
 };
 use chrono::{DateTime, Local, Utc};
 use bbqueue::{BBBuffer, ConstBBBuffer,
@@ -42,7 +45,7 @@ use spmc::{Sender, Receiver};
 use std::io::{Write, Read};
 use rand::Rng;
 use std::thread::sleep;
-use std::time::Duration;
+use time::Duration;
 
 pub struct SPICommand {
     creation_time: DateTime<Utc>,
@@ -50,19 +53,27 @@ pub struct SPICommand {
     id: u16,
     opcode: u16,
     data: Vec<u8>,
-    response: Option<Vec<u8>>
+    response: Option<Vec<u8>>,
+    delta_time: Option<chrono::Duration>,
+    rowvec: Vec<String>
 }
 
 impl SPICommand {
     fn new(id: u16, opcode: u16, data: Vec<u8>) -> SPICommand {
-        SPICommand {
+        let mut tmp = SPICommand {
             creation_time: Utc::now(),
             response_time: None,
             id: id,
             opcode: opcode,
             data: data,
-            response: None
-        }
+            response: None,
+            delta_time: None,
+            rowvec: Vec::new()
+        };
+
+        tmp.update_row_vector();
+
+        tmp
     }
 
     fn is_completed(&self) -> bool {
@@ -80,7 +91,11 @@ impl SPICommand {
     }
 
     fn get_row_vector(&self) -> Vec<String> {
-        vec![
+        self.rowvec.clone()
+    }
+
+    fn update_row_vector(&mut self) {
+        self.rowvec = vec![
             self.creation_time.format("%H:%M:%S.%f").to_string(), 
             self.data.len().to_string(),
             self.id.to_string(),
@@ -106,6 +121,14 @@ impl SPICommand {
                     "".to_string()
                 }
             },    
+            match self.delta_time {
+                Some(d) => {
+                    format!("{}", d)
+                },
+                None => {
+                    "".to_string()
+                }
+            },    
             match &self.response {
                 Some(d) => {
                     hex::encode(&d).chars()
@@ -125,7 +148,7 @@ impl SPICommand {
                     "".to_string()
                 }
             }    
-        ]
+        ];
     }
 }
 
@@ -139,7 +162,8 @@ pub struct SPIChannel {
     tx_queue_producer: Sender<Vec<u8>>,
     tx_queue_consumer: Receiver<Vec<u8>>,
     commands: Vec<SPICommand>,
-    rx_state: Arc<Mutex<SPIQueueState>>,
+    completed_commands: Vec<SPICommand>,
+//    rx_state: Arc<Mutex<SPIQueueState>>,
     tx_state: Arc<Mutex<SPIQueueState>>,
     spidev: Arc<Mutex<Spidev>>,
     bsy: Arc<Pin>,
@@ -168,7 +192,8 @@ impl SPIChannel {
             tx_queue_producer: tx_queue_producer,
             tx_queue_consumer: tx_queue_consumer,
             commands: Vec::new(),
-            rx_state: Arc::new(Mutex::new(SPIQueueState::Stopped)),
+            completed_commands: Vec::new(),
+//            rx_state: Arc::new(Mutex::new(SPIQueueState::Stopped)),
             tx_state: Arc::new(Mutex::new(SPIQueueState::Stopped)),
             spidev: Arc::new(Mutex::new(spi)),
             bsy: Arc::new(bsy_pin)
@@ -222,8 +247,12 @@ impl SPIChannel {
                             if bsy.get_value().unwrap() == 0 {
                                 break;
                             }
-                            println!("Waiting!\n");
-                            sleep(Duration::from_millis(10));
+                            {
+                                let mut m = messages.lock().unwrap();
+                                m.push(MessageLevel::INFO, "Waiting".to_string());
+                            }
+                            sleep(std::time::Duration::try_from(Duration::milliseconds(10)).unwrap());
+                                //  from_millis(10));
                         }
 
                         {
@@ -232,7 +261,7 @@ impl SPIChannel {
                         }
 
                         // Put in a wait between messages to give MCU time to think
-                        sleep(Duration::from_micros(100));
+                        sleep(std::time::Duration::try_from(Duration::microseconds(100)).unwrap());
                     },
                     Err(_) => {
                         break;
@@ -254,29 +283,39 @@ impl SPIChannel {
         thread::spawn(move || {
             // Do a 4 byte read from the SPI port
             let mut incomming_raw= [0u8; 4];
+            let mut a = Utc::now();
             {
                 let mut spi_guard = spi.lock().unwrap();
                 spi_guard.read(&mut incomming_raw).unwrap();
             }
+            let mut b = Utc::now();
+            let p1 = b-a;
 
+            a = Utc::now();
             let message_id: u16 = incomming_raw.read_with(&mut 0, LE).unwrap();
             let message_size: u16 = incomming_raw.read_with(&mut 2, LE).unwrap();
 
             // Create a receive buffer
             let mut rx_buf = vec![0_u8; message_size as usize];
+            b = Utc::now();
+            let p2 = b-a;
 
             // Lock the SPI device and read the data
+            a = Utc::now();
             {
                 let mut spi_guard = spi.lock().unwrap();
-                spi_guard.read(&mut rx_buf);
+                spi_guard.read(&mut rx_buf).unwrap();
             }
+            b = Utc::now();
+            let p3 = b-a;
+
+            messages.lock().unwrap().push(MessageLevel::INFO, format!("{} : {} : {}", p1, p2, p3));
 
             // Update the result table
             {
                 let mut spi_guard = SPI.lock().unwrap();
                 spi_guard.receive_response(message_id, rx_buf)
-            }
-
+            }            
             return
         });
     }
@@ -297,7 +336,10 @@ impl SPIChannel {
         match self.commands.iter().position(|r| r.id == id) {
             Some(index) => {
                 self.commands[index].response_time = Some(Utc::now());
+                self.commands[index].delta_time = Some(self.commands[index].response_time.unwrap() - self.commands[index].creation_time);
                 self.commands[index].response = Some(data);        
+                self.commands[index].update_row_vector();
+                self.completed_commands.push(self.commands.remove(index));
             },
             None => {}
         }
@@ -308,7 +350,7 @@ impl SPIChannel {
 static SPI: Lazy<Mutex<SPIChannel>> = Lazy::new(|| {
     Mutex::new(SPIChannel::new("/dev/spidev1.1"))
 });
-
+/*
 pub struct StatefulTable {
     state: TableState,
     items: Vec<Vec<String>>,
@@ -349,6 +391,55 @@ impl StatefulTable {
         self.state.select(Some(i));
     }
 }
+*/
+#[derive(PartialEq)]
+enum MessageLevel {
+    INFO,
+    ERROR,
+    CRITICAL
+}
+
+impl fmt::Display for MessageLevel {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            MessageLevel::INFO => write!(f, "INFO"),
+            MessageLevel::ERROR => write!(f, "ERROR"),
+            MessageLevel::CRITICAL => write!(f, "CRITICAL")
+        }
+    }
+}
+
+struct Message {
+    time: DateTime<Utc>,
+    level: MessageLevel,
+    string: String
+}
+
+struct Messages {
+    items: Vec<Message>,
+    state: ListState,
+    display_size: usize
+}
+
+impl Messages {
+    fn new() -> Self {
+        Messages {
+            items: Vec::new(),
+            state: ListState::default(),
+            display_size: 5
+        }
+    }
+
+    fn push(&mut self, level: MessageLevel, string: String) {
+        self.items.push(Message{ time: Utc::now(), level: level, string: string});
+        self.state.select(Some(self.items.len()-1 as usize));
+    }
+}
+
+static messages: Lazy<Mutex<Messages>> = Lazy::new(|| {
+    Mutex::new(Messages::new())
+});
+
 
 #[allow(unreachable_code)]
 fn main() -> Result<(), Box<dyn Error>> {
@@ -366,7 +457,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         SPI.lock().unwrap().start_inturrupt();
     }
 
-    let mut table = StatefulTable::new();
+//    let mut table = StatefulTable::new();
     let mut last_command_id = 0u16;
 
     loop {
@@ -376,21 +467,24 @@ fn main() -> Result<(), Box<dyn Error>> {
             .margin(1)
             .constraints(
                 [
-                    Constraint::Length(4),
-                    Constraint::Min(10)
+                    Constraint::Length(3),
+                    Constraint::Length(10),
+                    Constraint::Min(20),
+                    Constraint::Length(10)
                 ].as_ref()
             )
             .split(f.size());
 
-            let block = Block::default()
-                .title("Quick Commands")
-                .borders(Borders::ALL);
-            f.render_widget(block, chunks[0]);
-            
+            let texts = [Text::raw("s: Single preformatted echo command          r: Random number of random echo commands")];
+            let paragraph = Paragraph::new(
+                texts.iter())
+                .block(Block::default().borders(Borders::ALL).title("Hotkeys"));
+            f.render_widget(paragraph, chunks[0]);
+
             let incomplete_stye = Style::default().fg(Color::Red);
             let complete_style = Style::default().fg(Color::Green);
 
-            let header = ["Tx Time", "Size", "ID", "Command", "Data", "", "Rx Time", "Response"];
+            let header = ["Tx Time", "Size", "ID", "Command", "Data", "", "Rx Time", "Delta Time", "Response"];
             let rows: Vec<tui::widgets::Row<std::vec::IntoIter<std::string::String>>> = {
                 let SPI_guard = SPI.lock().unwrap();
                 SPI_guard.commands
@@ -408,8 +502,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .collect()
             };
 
+            let rows_completed: Vec<tui::widgets::Row<std::vec::IntoIter<std::string::String>>> = {
+                let SPI_guard = SPI.lock().unwrap();
+                SPI_guard.completed_commands 
+                    .iter()
+                    .map(|a| {
+                        (a.is_completed(), a.get_row_vector())
+                    })
+                    .map(|i| {
+                        if i.0 {
+                            Row::StyledData(i.1.into_iter(), complete_style)
+                        } else {
+                            Row::StyledData(i.1.into_iter(), incomplete_stye)
+                        }
+                    })
+                    .collect()
+            };
+
+            let mut ts = TableState::default();
+            ts.select(Some(rows.len()));
             let t = Table::new(header.iter(), rows.into_iter())
-                .block(Block::default().borders(Borders::ALL).title("Command Execution Timeline"))
+                .block(Block::default().borders(Borders::ALL).title("Unanswered Commands"))
                 .widths(&[
                     Constraint::Length(20),
                     Constraint::Length(6),
@@ -418,9 +531,49 @@ fn main() -> Result<(), Box<dyn Error>> {
                     Constraint::Min(30),
                     Constraint::Length(8),
                     Constraint::Length(20),
+                    Constraint::Length(20),
                     Constraint::Min(30)
                 ]);
-            f.render_stateful_widget(t, chunks[1], &mut table.state);
+            f.render_stateful_widget(t, chunks[1], &mut ts);
+
+            let mut ts = TableState::default();
+            ts.select(Some(rows_completed.len()));
+            let t = Table::new(header.iter(), rows_completed.into_iter())
+                .block(Block::default().borders(Borders::ALL).title("Completed Commands"))
+                .widths(&[
+                    Constraint::Length(20),
+                    Constraint::Length(6),
+                    Constraint::Length(6),
+                    Constraint::Length(8),
+                    Constraint::Min(30),
+                    Constraint::Length(8),
+                    Constraint::Length(20),
+                    Constraint::Length(20),
+                    Constraint::Min(30)
+                ]);
+            f.render_stateful_widget(t, chunks[2], &mut ts);
+
+            // Draw logs
+            let info_style = Style::default().fg(Color::White);
+            let error_style = Style::default().fg(Color::Magenta);
+            let critical_style = Style::default().fg(Color::Red);
+            {
+                let messages_guard = messages.lock().unwrap();
+                let mut state = messages_guard.state.clone();
+                let logs = messages_guard.items.iter().map(|item| {
+                        Text::styled(
+                            format!("{} {}: {}", item.time.format("%H:%M:%S.%f").to_string(), item.level, item.string),
+                            match item.level {
+                                MessageLevel::INFO => info_style,
+                                MessageLevel::CRITICAL => critical_style,
+                                MessageLevel::ERROR => error_style
+                            },
+                        )
+                    });
+
+                let logs = List::new(logs).block(Block::default().borders(Borders::ALL).title("Messages"));
+                f.render_stateful_widget(logs, chunks[3], &mut state);
+            }
         }).unwrap();
 
         match events.next()? {
@@ -430,8 +583,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 Key::Char('r') => {
                     {
-//                        let n = rng.gen_range(1, 10);
-                        let n = 3;
+                        let n = rng.gen_range(1, 10);
                         for i in 0..n {
                             let length = rng.gen_range(0, 5);
                             let data = (0..length).map(|_| {
@@ -454,12 +606,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
-                }
-                Key::Down => {
-                    table.next();
-                }
-                Key::Up => {
-                    table.previous();
                 }
                 _ => {}
             },
