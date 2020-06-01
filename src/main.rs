@@ -344,7 +344,8 @@ impl SPIChannel {
 }
 
 static SPI: Lazy<Mutex<SPIChannel>> = Lazy::new(|| {
-    Mutex::new(SPIChannel::new("/dev/spidev1.1"))
+//    Mutex::new(SPIChannel::new("/dev/spidev1.1"))
+    Mutex::new(SPIChannel::new("/dev/spidev0.0"))
 });
 /*
 pub struct StatefulTable {
@@ -640,7 +641,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 *tmp += 1;
                                 *tmp
                             };
-                            let cmd = SPICommand::new(cmd_id, 1, data);
+                            let cmd = SPICommand::new(cmd_id, 0xFFFF, data);
 
                             {
                                 let mut SPI_guard = SPI.lock().unwrap();
@@ -656,7 +657,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                         *tmp += 1;
                         *tmp
                     };
-                    let cmd = SPICommand::new(cmd_id, 1, vec![0, 1, 2, 3, 4, 5]);
+                    let cmd = SPICommand::new(cmd_id, 0xFFFF, vec![0, 1, 2, 3, 4, 5]);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },
+                Key::Char('e') => {
+
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let cmd = SPICommand::new(cmd_id, 0x0001, vec![1]);
 
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
@@ -669,7 +682,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             },
             _ => {}
         };
-        // Do event processing here somehow...
+        // Do event processing here somehow... 
     };
 
     Ok(())
