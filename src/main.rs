@@ -507,7 +507,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .margin(1)
             .constraints(
                 [
-                    Constraint::Length(3),
+                    Constraint::Length(4),
                     Constraint::Length(10),
                     Constraint::Min(20),
                     Constraint::Length(10)
@@ -515,7 +515,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             )
             .split(f.size());
 
-            let texts = [Text::raw(format!("s: Single preformatted echo command          r: Single Shot of Random number of random echo commands        t: Toggle Random Event Generation {}",
+            let texts = [Text::raw(format!(
+                "s: Single preformatted echo command    r: Single Shot of Random number of random echo commands    w: Toggle Random Event Generation {}\nt: RA Encoder    g: RA Start    b: RA Stop    y: Dec Encoder    h: Dec Start    n: Dec Stop",
                 match *random_event_generator_status.lock().unwrap() {
                     true => { "Running" },
                     false => { "Not Running" }
@@ -662,7 +663,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
                 },
-                Key::Char('e') => {
+                Key::Char('t') => {
 
                     let cmd_id: u16= {
                         let mut tmp = last_command_id.lock().unwrap();
@@ -674,7 +675,67 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
                 },
-                Key::Char('t') => {
+                Key::Char('g') => {
+
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let cmd = SPICommand::new(cmd_id, 0x0011, vec![1]);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },
+                Key::Char('b') => {
+
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let cmd = SPICommand::new(cmd_id, 0x0010, vec![1]);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },
+                Key::Char('y') => {
+
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let cmd = SPICommand::new(cmd_id, 0x0001, vec![2]);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },
+                Key::Char('h') => {
+
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let cmd = SPICommand::new(cmd_id, 0x0011, vec![2]);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },
+                Key::Char('n') => {
+
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let cmd = SPICommand::new(cmd_id, 0x0010, vec![2]);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },
+                Key::Char('w') => {
                     let mut tmp = random_event_generator_status.lock().unwrap();
                     *tmp = !*tmp;
                 },
