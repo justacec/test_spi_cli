@@ -516,7 +516,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .split(f.size());
 
             let texts = [Text::raw(format!(
-                "s: Single preformatted echo command    r: Single Shot of Random number of random echo commands    w: Toggle Random Event Generation {}\nt: RA Encoder    g: RA Start    b: RA Stop    y: Dec Encoder    h: Dec Start    n: Dec Stop",
+                "s: Single preformatted echo command    r: Single Shot of Random number of random echo commands    w: Toggle Random Event Generation {}\nt: RA Encoder    g: RA Start    b: RA Stop    y: Dec Encoder    h: Dec Start    n: Dec Stop\n5: RA 90 Degrees    %: RA -90 Degrees",
                 match *random_event_generator_status.lock().unwrap() {
                     true => { "Running" },
                     false => { "Not Running" }
@@ -699,6 +699,70 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
                 },
+                Key::Char('5') => {
+
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let angle = 90.0;
+                    let mut data: Vec<u8> = vec![0;5];
+                    data.write_with::<u8>(&mut 0, 1, LE).unwrap();
+                    data.write_with::<f32>(&mut 1, angle, LE).unwrap();                    
+                    let cmd = SPICommand::new(cmd_id, 0x0014, data);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },
+                Key::Char('%') => {
+
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let angle = -90.0;
+                    let mut data: Vec<u8> = vec![0;5];
+                    data.write_with::<u8>(&mut 0, 1, LE).unwrap();
+                    data.write_with::<f32>(&mut 1, angle, LE).unwrap();                    
+                    let cmd = SPICommand::new(cmd_id, 0x0014, data);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },                
+                Key::Char('6') => {
+
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let angle = 90.0;
+                    let mut data: Vec<u8> = vec![0;5];
+                    data.write_with::<u8>(&mut 0, 2, LE).unwrap();
+                    data.write_with::<f32>(&mut 1, angle, LE).unwrap();                    
+                    let cmd = SPICommand::new(cmd_id, 0x0014, data);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },
+                Key::Char('^') => {
+
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let angle = -90.0;
+                    let mut data: Vec<u8> = vec![0;5];
+                    data.write_with::<u8>(&mut 0, 2, LE).unwrap();
+                    data.write_with::<f32>(&mut 1, angle, LE).unwrap();                    
+                    let cmd = SPICommand::new(cmd_id, 0x0014, data);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },                
                 Key::Char('y') => {
 
                     let cmd_id: u16= {
