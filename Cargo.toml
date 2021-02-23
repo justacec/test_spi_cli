@@ -16,7 +16,7 @@ serde_derive = "1.0"
 serde_json = "1.0"
 json = "0.12"
 byte = "0.2"
-tui = "0.9"
+tui = "0.14"
 termion = { version = "1.5", optional = true }
 rand = "0.7"
 rand_distr = "0.2"

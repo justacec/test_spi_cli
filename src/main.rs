@@ -25,7 +25,8 @@ use tui::{
     backend::TermionBackend,
     layout::{Constraint, Layout},
     style::{Color, Style},
-    widgets::{Block, Borders, Row, Table, TableState, List, ListState, Text, Paragraph},
+    widgets::{Block, Borders, Row, Table, TableState, List, ListState, Paragraph},
+    text::{Text},
     Terminal,
     
 };
@@ -127,7 +128,7 @@ impl SPICommand {
             },    
             match &self.response {
                 Some(d) => {
-                    hex::encode(&d).chars()
+                    let mut raw = hex::encode(&d).chars()
                         .enumerate()
                         .flat_map(|(i, c)| {
                             if i != 0 && i % 2 == 0 {
@@ -138,7 +139,34 @@ impl SPICommand {
                             .into_iter()
                             .chain(std::iter::once(c))
                         })
-                        .collect::<String>()
+                        .collect::<String>();
+
+                    let decode = match self.opcode {
+                        0xFF01 => {
+                            let temp = f32::from_bits(0_u32 |
+                                ((d[0] as u32) << 0) |
+                                ((d[1] as u32) << 8) |
+                                ((d[2] as u32) << 16) |
+                                ((d[3] as u32) << 24));
+                            format!("{:#03.4}°C {:#03.4}°F", temp, 32_f32 + (9_f32/5_f32)*temp).to_string()
+                        },
+                        0xFF02 => {
+                            format!("{:#03.4}%", f32::from_bits(0_u32 |
+                                ((d[0] as u32) << 0) |
+                                ((d[1] as u32) << 8) |
+                                ((d[2] as u32) << 16) |
+                                ((d[3] as u32) << 24))
+                            ).to_string()
+                        },
+                        _ => "".to_string()
+                    };
+
+                    if decode.len() > 0 {
+                        raw.push_str("  ->  ");
+                        raw.push_str(decode.as_str());
+                    }
+
+                    raw
                 },
                 None => {
                     "".to_string()
@@ -245,7 +273,7 @@ impl SPIChannel {
                             }
                             {
                                 let mut m = messages.lock().unwrap();
-                                m.push(MessageLevel::INFO, "Waiting".to_string());
+//                                m.push(MessageLevel::INFO, "Waiting".to_string());
                             }
                             sleep(std::time::Duration::try_from(Duration::milliseconds(10)).unwrap());
                                 //  from_millis(10));
@@ -284,6 +312,7 @@ impl SPIChannel {
                 let mut spi_guard = spi.lock().unwrap();
                 spi_guard.read(&mut incomming_raw).unwrap();
             }
+            messages.lock().unwrap().push(MessageLevel::INFO, format!("Return Header: {:?}", incomming_raw));
             let mut b = Utc::now();
             let p1 = b-a;
 
@@ -300,6 +329,7 @@ impl SPIChannel {
             a = Utc::now();
             {
                 let mut spi_guard = spi.lock().unwrap();
+                messages.lock().unwrap().push(MessageLevel::INFO, format!("Reading {} bytes", message_size));
                 spi_guard.read(&mut rx_buf).unwrap();
             }
             b = Utc::now();
@@ -446,7 +476,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     terminal.clear()?;
 
     let events = Events::new();
-
     let mut rng = rand::thread_rng();
 
     // Setup the data ready inturrupt
@@ -458,6 +487,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Code for seperate thread to generate random events
     let random_event_generator_status: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    let focus_motor: Arc<Mutex<u8>> = Arc::new(Mutex::new(1));
+    let ra_speed: Arc<Mutex<f32>> = Arc::new(Mutex::new(90.0));
+    let dec_speed: Arc<Mutex<f32>> = Arc::new(Mutex::new(90.0));
     let reg = random_event_generator_status.clone();
     let last_command_id_thread = last_command_id.clone();
     thread::spawn(move || {
@@ -484,7 +516,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         *tmp += 1;
                         *tmp
                     };
-                    let cmd = SPICommand::new(cmd_id, 1, data);
+                    let cmd = SPICommand::new(cmd_id, 0xFFFF, data);
 
                     {
                         let mut SPI_guard = SPI.lock().unwrap();
@@ -500,136 +532,162 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    loop {
-        terminal.draw(|mut f| {
-            let chunks = Layout::default()
-            .direction(tui::layout::Direction::Vertical)
-            .margin(1)
-            .constraints(
-                [
-                    Constraint::Length(4),
-                    Constraint::Length(10),
-                    Constraint::Min(20),
-                    Constraint::Length(10)
-                ].as_ref()
-            )
-            .split(f.size());
-
-            let texts = [Text::raw(format!(
-                "s: Single preformatted echo command    r: Single Shot of Random number of random echo commands    w: Toggle Random Event Generation {}\nt: RA Encoder    g: RA Start    b: RA Stop    y: Dec Encoder    h: Dec Start    n: Dec Stop\n5: RA 90 Degrees    %: RA -90 Degrees",
-                match *random_event_generator_status.lock().unwrap() {
-                    true => { "Running" },
-                    false => { "Not Running" }
+    let random_event_generator_status_2 = random_event_generator_status.clone();
+    let focus_motor_2 = focus_motor.clone();
+    thread::spawn(move || {
+        loop {
+            terminal.draw(|mut f| {
+                let chunks = Layout::default()
+                .direction(tui::layout::Direction::Vertical)
+                .margin(1)
+                .constraints(
+                    [
+                        Constraint::Length(6),
+                        Constraint::Length(10),
+                        Constraint::Min(20),
+                        Constraint::Length(10)
+                    ].as_ref()
+                )
+                .split(f.size());
+    
+                let texts = [Text::raw(format!(
+                    "<: Single preformatted echo command    >: Single Shot of Random number of random echo commands    /: Toggle Random Event Generation {}\ne: Get Encoder    a: Start Motor    z: Stop Motor    s: Get Status     x: Dump Shadow to ITM\nt: Temperture     h: Humidity",
+                    match *random_event_generator_status_2.lock().unwrap() {
+                        true => { "Running" },
+                        false => { "Not Running" }
+                    }
+                ))];
+                let paragraph = Paragraph::new(
+                    texts.iter())
+                    .block(Block::default().borders(Borders::ALL).title(
+                        match *focus_motor_2.lock().unwrap() {
+                            1 => "Hotkeys [Right Ascention]",
+                            2 => "Hotkeys [Declination]",
+                            _ => "Hotkeys"
+                        }
+                    ));
+                f.render_widget(paragraph, chunks[0]);
+    
+                let incomplete_stye = Style::default().fg(Color::Red);
+                let complete_style = Style::default().fg(Color::Green);
+    
+                let header = ["Tx Time", "Size", "ID", "Command", "Data", "", "Rx Time", "Delta Time", "Response"];
+                let rows: Vec<tui::widgets::Row<std::vec::IntoIter<std::string::String>>> = {
+                    let SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.commands
+                        .iter()
+                        .map(|a| {
+                            (a.is_completed(), a.get_row_vector())
+                        })
+                        .map(|i| {
+                            if i.0 {
+                                Row::StyledData(i.1.into_iter(), complete_style)
+                            } else {
+                                Row::StyledData(i.1.into_iter(), incomplete_stye)
+                            }
+                        })
+                        .collect()
+                };
+    
+                let rows_completed: Vec<tui::widgets::Row<std::vec::IntoIter<std::string::String>>> = {
+                    let SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.completed_commands 
+                        .iter()
+                        .map(|a| {
+                            (a.is_completed(), a.get_row_vector())
+                        })
+                        .map(|i| {
+                            if i.0 {
+                                Row::StyledData(i.1.into_iter(), complete_style)
+                            } else {
+                                Row::StyledData(i.1.into_iter(), incomplete_stye)
+                            }
+                        })
+                        .collect()
+                };
+    
+                let mut ts = TableState::default();
+                ts.select(Some(rows.len()));
+                let title = &format!("Unanswered Commands [{}]", rows.len())[..];
+                let t = Table::new(header.iter(), rows.into_iter())
+                    .block(Block::default().borders(Borders::ALL).title(title))
+                    .widths(&[
+                        Constraint::Length(20),
+                        Constraint::Length(6),
+                        Constraint::Length(6),
+                        Constraint::Length(8),
+                        Constraint::Min(30),
+                        Constraint::Length(8),
+                        Constraint::Length(20),
+                        Constraint::Length(20),
+                        Constraint::Min(30)
+                    ]);
+                f.render_stateful_widget(t, chunks[1], &mut ts);
+    
+                let mut ts = TableState::default();
+                ts.select(Some(rows_completed.len()));
+                let title = &format!("Completed Commands [{}]", rows_completed.len())[..];
+                let t = Table::new(header.iter(), rows_completed.into_iter())
+                    .block(Block::default().borders(Borders::ALL).title(title))
+                    .widths(&[
+                        Constraint::Length(20),
+                        Constraint::Length(6),
+                        Constraint::Length(6),
+                        Constraint::Length(8),
+                        Constraint::Min(30),
+                        Constraint::Length(8),
+                        Constraint::Length(20),
+                        Constraint::Length(20),
+                        Constraint::Min(30)
+                    ]);
+                f.render_stateful_widget(t, chunks[2], &mut ts);
+    
+                // Draw logs
+                let info_style = Style::default().fg(Color::White);
+                let error_style = Style::default().fg(Color::Magenta);
+                let critical_style = Style::default().fg(Color::Red);
+                {
+                    let messages_guard = messages.lock().unwrap();
+                    let mut state = messages_guard.state.clone();
+                    let logs = messages_guard.items.iter().map(|item| {
+                            Text::styled(
+                                format!("{} {}: {}", item.time.format("%H:%M:%S.%f").to_string(), item.level, item.string),
+                                match item.level {
+                                    MessageLevel::INFO => info_style,
+                                    MessageLevel::CRITICAL => critical_style,
+                                    MessageLevel::ERROR => error_style
+                                },
+                            )
+                        });
+    
+                    let logs = List::new(logs).block(Block::default().borders(Borders::ALL).title("Messages"));
+                    f.render_stateful_widget(logs, chunks[3], &mut state);
                 }
-            ))];
-            let paragraph = Paragraph::new(
-                texts.iter())
-                .block(Block::default().borders(Borders::ALL).title("Hotkeys"));
-            f.render_widget(paragraph, chunks[0]);
+            }).unwrap();
+        }
+    });
 
-            let incomplete_stye = Style::default().fg(Color::Red);
-            let complete_style = Style::default().fg(Color::Green);
-
-            let header = ["Tx Time", "Size", "ID", "Command", "Data", "", "Rx Time", "Delta Time", "Response"];
-            let rows: Vec<tui::widgets::Row<std::vec::IntoIter<std::string::String>>> = {
-                let SPI_guard = SPI.lock().unwrap();
-                SPI_guard.commands
-                    .iter()
-                    .map(|a| {
-                        (a.is_completed(), a.get_row_vector())
-                    })
-                    .map(|i| {
-                        if i.0 {
-                            Row::StyledData(i.1.into_iter(), complete_style)
-                        } else {
-                            Row::StyledData(i.1.into_iter(), incomplete_stye)
-                        }
-                    })
-                    .collect()
-            };
-
-            let rows_completed: Vec<tui::widgets::Row<std::vec::IntoIter<std::string::String>>> = {
-                let SPI_guard = SPI.lock().unwrap();
-                SPI_guard.completed_commands 
-                    .iter()
-                    .map(|a| {
-                        (a.is_completed(), a.get_row_vector())
-                    })
-                    .map(|i| {
-                        if i.0 {
-                            Row::StyledData(i.1.into_iter(), complete_style)
-                        } else {
-                            Row::StyledData(i.1.into_iter(), incomplete_stye)
-                        }
-                    })
-                    .collect()
-            };
-
-            let mut ts = TableState::default();
-            ts.select(Some(rows.len()));
-            let title = &format!("Unanswered Commands [{}]", rows.len())[..];
-            let t = Table::new(header.iter(), rows.into_iter())
-                .block(Block::default().borders(Borders::ALL).title(title))
-                .widths(&[
-                    Constraint::Length(20),
-                    Constraint::Length(6),
-                    Constraint::Length(6),
-                    Constraint::Length(8),
-                    Constraint::Min(30),
-                    Constraint::Length(8),
-                    Constraint::Length(20),
-                    Constraint::Length(20),
-                    Constraint::Min(30)
-                ]);
-            f.render_stateful_widget(t, chunks[1], &mut ts);
-
-            let mut ts = TableState::default();
-            ts.select(Some(rows_completed.len()));
-            let title = &format!("Completed Commands [{}]", rows_completed.len())[..];
-            let t = Table::new(header.iter(), rows_completed.into_iter())
-                .block(Block::default().borders(Borders::ALL).title(title))
-                .widths(&[
-                    Constraint::Length(20),
-                    Constraint::Length(6),
-                    Constraint::Length(6),
-                    Constraint::Length(8),
-                    Constraint::Min(30),
-                    Constraint::Length(8),
-                    Constraint::Length(20),
-                    Constraint::Length(20),
-                    Constraint::Min(30)
-                ]);
-            f.render_stateful_widget(t, chunks[2], &mut ts);
-
-            // Draw logs
-            let info_style = Style::default().fg(Color::White);
-            let error_style = Style::default().fg(Color::Magenta);
-            let critical_style = Style::default().fg(Color::Red);
-            {
-                let messages_guard = messages.lock().unwrap();
-                let mut state = messages_guard.state.clone();
-                let logs = messages_guard.items.iter().map(|item| {
-                        Text::styled(
-                            format!("{} {}: {}", item.time.format("%H:%M:%S.%f").to_string(), item.level, item.string),
-                            match item.level {
-                                MessageLevel::INFO => info_style,
-                                MessageLevel::CRITICAL => critical_style,
-                                MessageLevel::ERROR => error_style
-                            },
-                        )
-                    });
-
-                let logs = List::new(logs).block(Block::default().borders(Borders::ALL).title("Messages"));
-                f.render_stateful_widget(logs, chunks[3], &mut state);
-            }
-        }).unwrap();
-
+    loop {
         match events.next()? {
             Event::Input(key) => match key {
                 Key::Char('q') => {
                     break;
                 },
-                Key::Char('r') => {
+                // Single echo command
+                Key::Char('<') => {
+
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let cmd = SPICommand::new(cmd_id, 0xFFFF, vec![0, 1, 2, 3, 4, 5]);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },
+                // Random Set of echo commands (single batch)
+                Key::Char('>') => {
                     {
                         let n = rng.gen_range(1, 10);
                         for i in 0..n {
@@ -651,54 +709,126 @@ fn main() -> Result<(), Box<dyn Error>> {
                         }
                     }
                 },
-                Key::Char('s') => {
+                // Toggle stream of random commands
+                Key::Char('/') => {
+                    let mut tmp = random_event_generator_status.lock().unwrap();
+                    *tmp = !*tmp;
+                },
+
+                // Motor Selection
+                // Increase Speed
+                Key::Char('+') => {
+                    let mut speed = match *focus_motor.lock().unwrap() {
+                        1 => {
+                            ra_speed.lock().unwrap()
+                        },
+                        2 => {
+                            dec_speed.lock().unwrap()
+                        },
+                        _ => {
+                            ra_speed.lock().unwrap()
+                        }
+                    };
+
+                    *speed = *speed + 100_f32;
 
                     let cmd_id: u16= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
                     };
-                    let cmd = SPICommand::new(cmd_id, 0xFFFF, vec![0, 1, 2, 3, 4, 5]);
+                    let mut data: Vec<u8> = vec![0;5];
+                    data.write_with::<u8>(&mut 0, *focus_motor.lock().unwrap(), LE).unwrap();
+                    data.write_with::<f32>(&mut 1, *speed, LE).unwrap();                    
+                    let cmd = SPICommand::new(cmd_id, 0x0012, data);
 
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
                 },
-                Key::Char('t') => {
+                // Increase Speed
+                Key::Char('-') => {
+                    let mut speed = match *focus_motor.lock().unwrap() {
+                        1 => {
+                            ra_speed.lock().unwrap()
+                        },
+                        2 => {
+                            dec_speed.lock().unwrap()
+                        },
+                        _ => {
+                            ra_speed.lock().unwrap()
+                        }
+                    };
+
+                    *speed = *speed - 100_f32;
+                    *speed = f32::max(*speed, 0_f32);
 
                     let cmd_id: u16= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
                     };
-                    let cmd = SPICommand::new(cmd_id, 0x0001, vec![1]);
+                    let mut data: Vec<u8> = vec![0;5];
+                    data.write_with::<u8>(&mut 0, *focus_motor.lock().unwrap(), LE).unwrap();
+                    data.write_with::<f32>(&mut 1, *speed, LE).unwrap();                    
+                    let cmd = SPICommand::new(cmd_id, 0x0012, data);
 
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
                 },
-                Key::Char('g') => {
+
+                // Right Ascention
+                Key::Char('[') => {
+                    let mut tmp = focus_motor.lock().unwrap();
+                    *tmp = 1
+                },
+                // Declination
+                Key::Char(']') => {
+                    let mut tmp = focus_motor.lock().unwrap();
+                    *tmp = 2
+                },
+                // Motor Comands
+
+                // Get Encoder
+                Key::Char('e') => {
 
                     let cmd_id: u16= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
                     };
-                    let cmd = SPICommand::new(cmd_id, 0x0011, vec![1]);
+                    let cmd = SPICommand::new(cmd_id, 0x0001, vec![*focus_motor.lock().unwrap()]);
 
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
                 },
-                Key::Char('b') => {
+
+                // Start Motor
+                Key::Char('a') => {
 
                     let cmd_id: u16= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
                     };
-                    let cmd = SPICommand::new(cmd_id, 0x0010, vec![1]);
+                    let cmd = SPICommand::new(cmd_id, 0x0011, vec![*focus_motor.lock().unwrap()]);
 
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
                 },
+                // Stop Motor
+                Key::Char('z') => {
+
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let cmd = SPICommand::new(cmd_id, 0x0010, vec![*focus_motor.lock().unwrap()]);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },
+                // Shift +90 Degrees
                 Key::Char('5') => {
 
                     let cmd_id: u16= {
@@ -708,13 +838,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     };
                     let angle = 90.0;
                     let mut data: Vec<u8> = vec![0;5];
-                    data.write_with::<u8>(&mut 0, 1, LE).unwrap();
+                    data.write_with::<u8>(&mut 0, *focus_motor.lock().unwrap(), LE).unwrap();
                     data.write_with::<f32>(&mut 1, angle, LE).unwrap();                    
                     let cmd = SPICommand::new(cmd_id, 0x0014, data);
 
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
                 },
+                // Shift -90 Degrees
                 Key::Char('%') => {
 
                     let cmd_id: u16= {
@@ -724,57 +855,53 @@ fn main() -> Result<(), Box<dyn Error>> {
                     };
                     let angle = -90.0;
                     let mut data: Vec<u8> = vec![0;5];
-                    data.write_with::<u8>(&mut 0, 1, LE).unwrap();
+                    data.write_with::<u8>(&mut 0, *focus_motor.lock().unwrap(), LE).unwrap();
                     data.write_with::<f32>(&mut 1, angle, LE).unwrap();                    
                     let cmd = SPICommand::new(cmd_id, 0x0014, data);
 
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
-                },                
-                Key::Char('6') => {
+                },  
+                // Get Status
+                Key::Char('s') => {
 
                     let cmd_id: u16= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
                     };
-                    let angle = 90.0;
-                    let mut data: Vec<u8> = vec![0;5];
-                    data.write_with::<u8>(&mut 0, 2, LE).unwrap();
-                    data.write_with::<f32>(&mut 1, angle, LE).unwrap();                    
-                    let cmd = SPICommand::new(cmd_id, 0x0014, data);
+                    let cmd = SPICommand::new(cmd_id, 0x0023, vec![*focus_motor.lock().unwrap()]);
 
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
                 },
-                Key::Char('^') => {
+                // Dump Shadow to ITM Port
+                Key::Char('x') => {
 
                     let cmd_id: u16= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
                     };
-                    let angle = -90.0;
-                    let mut data: Vec<u8> = vec![0;5];
-                    data.write_with::<u8>(&mut 0, 2, LE).unwrap();
-                    data.write_with::<f32>(&mut 1, angle, LE).unwrap();                    
-                    let cmd = SPICommand::new(cmd_id, 0x0014, data);
-
-                    let mut SPI_guard = SPI.lock().unwrap();
-                    SPI_guard.send_command(cmd);
-                },                
-                Key::Char('y') => {
-
-                    let cmd_id: u16= {
-                        let mut tmp = last_command_id.lock().unwrap();
-                        *tmp += 1;
-                        *tmp
-                    };
-                    let cmd = SPICommand::new(cmd_id, 0x0001, vec![2]);
+                    let cmd = SPICommand::new(cmd_id, 0x0024, vec![*focus_motor.lock().unwrap()]);
 
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
                 },
+                // Get Temperture
+                Key::Char('t') => {
+
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let cmd = SPICommand::new(cmd_id, 0xFF01, vec![]);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },
+                // Get Humidity
                 Key::Char('h') => {
 
                     let cmd_id: u16= {
@@ -782,26 +909,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                         *tmp += 1;
                         *tmp
                     };
-                    let cmd = SPICommand::new(cmd_id, 0x0011, vec![2]);
+                    let cmd = SPICommand::new(cmd_id, 0xFF02, vec![]);
 
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
-                },
-                Key::Char('n') => {
-
-                    let cmd_id: u16= {
-                        let mut tmp = last_command_id.lock().unwrap();
-                        *tmp += 1;
-                        *tmp
-                    };
-                    let cmd = SPICommand::new(cmd_id, 0x0010, vec![2]);
-
-                    let mut SPI_guard = SPI.lock().unwrap();
-                    SPI_guard.send_command(cmd);
-                },
-                Key::Char('w') => {
-                    let mut tmp = random_event_generator_status.lock().unwrap();
-                    *tmp = !*tmp;
                 },
                 _ => {}
             },
