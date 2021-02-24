@@ -490,6 +490,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let focus_motor: Arc<Mutex<u8>> = Arc::new(Mutex::new(1));
     let ra_speed: Arc<Mutex<f32>> = Arc::new(Mutex::new(90.0));
     let dec_speed: Arc<Mutex<f32>> = Arc::new(Mutex::new(90.0));
+    let ra_is_silent: Arc<Mutex<bool>> = Arc::new(Mutex::new(true));
+    let dec_is_silent: Arc<Mutex<bool>> = Arc::new(Mutex::new(true));
     let reg = random_event_generator_status.clone();
     let last_command_id_thread = last_command_id.clone();
     thread::spawn(move || {
@@ -534,6 +536,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let random_event_generator_status_2 = random_event_generator_status.clone();
     let focus_motor_2 = focus_motor.clone();
+    let ra_is_silent_2 = ra_is_silent.clone();
+    let dec_is_silent_2 = dec_is_silent.clone();
     thread::spawn(move || {
         loop {
             terminal.draw(|mut f| {
@@ -551,7 +555,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .split(f.size());
     
                 let texts = Text::raw(format!(
-                    "<: Single preformatted echo command    >: Single Shot of Random number of random echo commands    /: Toggle Random Event Generation {}\ne: Get Encoder    a: Start Motor    z: Stop Motor    s: Get Status     x: Dump Shadow to ITM\nt: Temperture     h: Humidity",
+                    "<: Single preformatted echo command    >: Single Shot of Random number of random echo commands    /: Toggle Random Event Generation {}\ne: Get Encoder    a: Start Motor    z: Stop Motor    s: Get Status     x: Dump Shadow to ITM    m: Toggle Silent Mode\nt: Temperture     h: Humidity",
                     match *random_event_generator_status_2.lock().unwrap() {
                         true => { "Running" },
                         false => { "Not Running" }
@@ -564,8 +568,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                         .borders(Borders::ALL)
                         .title(
                             match *focus_motor_2.lock().unwrap() {
-                                1 => "Hotkeys [Right Ascention]",
-                                2 => "Hotkeys [Declination]",
+                                1 => match *ra_is_silent_2.lock().unwrap() {
+                                    true => "Hotkeys [Right Ascention, Silent]",
+                                    false => "Hotkeys [Right Ascention, Not Silent]"
+                                },
+                                1 => match *dec_is_silent_2.lock().unwrap() {
+                                    true => "Hotkeys [Declination, Silent]",
+                                    false => "Hotkeys [Declination, Not Silent]"
+                                },
                                 _ => "Hotkeys"
                             }
                     ));
@@ -725,6 +735,36 @@ fn main() -> Result<(), Box<dyn Error>> {
                 },
 
                 // Motor Selection
+                // Toggle silent mode
+                Key::Char('m') => {
+                    let mut is_silent = match *focus_motor.lock().unwrap() {
+                        1 => {
+                            ra_is_silent.lock().unwrap()
+                        },
+                        2 => {
+                            dec_is_silent.lock().unwrap()
+                        },
+                        _ => {
+                            ra_is_silent.lock().unwrap()
+                        }
+                    };
+
+                    *is_silent = !*is_silent;
+
+                    let cmd_id: u16= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let mut data: Vec<u8> = vec![0;2];
+                    data.write_with::<u8>(&mut 0, *focus_motor.lock().unwrap(), LE).unwrap();
+                    data.write_with::<u8>(&mut 1, *is_silent as u8, LE).unwrap();                    
+                    let cmd = SPICommand::new(cmd_id, 0x0026, data);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },
+
                 // Increase Speed
                 Key::Char('+') => {
                     let mut speed = match *focus_motor.lock().unwrap() {
@@ -769,7 +809,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     };
 
                     *speed = *speed - 100_f32;
-                    *speed = f32::max(*speed, 0_f32);
+//                    *speed = f32::max(*speed, 0_f32);
 
                     let cmd_id: u16= {
                         let mut tmp = last_command_id.lock().unwrap();
