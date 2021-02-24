@@ -25,7 +25,7 @@ use tui::{
     backend::TermionBackend,
     layout::{Constraint, Layout},
     style::{Color, Style},
-    widgets::{Block, Borders, Row, Table, TableState, List, ListState, Paragraph},
+    widgets::{Block, Borders, Row, Table, TableState, List, ListState, Paragraph, ListItem},
     text::{Text},
     Terminal,
     
@@ -550,21 +550,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                 )
                 .split(f.size());
     
-                let texts = [Text::raw(format!(
+                let texts = Text::raw(format!(
                     "<: Single preformatted echo command    >: Single Shot of Random number of random echo commands    /: Toggle Random Event Generation {}\ne: Get Encoder    a: Start Motor    z: Stop Motor    s: Get Status     x: Dump Shadow to ITM\nt: Temperture     h: Humidity",
                     match *random_event_generator_status_2.lock().unwrap() {
                         true => { "Running" },
                         false => { "Not Running" }
                     }
-                ))];
+                ));
                 let paragraph = Paragraph::new(
-                    texts.iter())
-                    .block(Block::default().borders(Borders::ALL).title(
-                        match *focus_motor_2.lock().unwrap() {
-                            1 => "Hotkeys [Right Ascention]",
-                            2 => "Hotkeys [Declination]",
-                            _ => "Hotkeys"
-                        }
+                    texts)
+                    .block(
+                        Block::default()
+                        .borders(Borders::ALL)
+                        .title(
+                            match *focus_motor_2.lock().unwrap() {
+                                1 => "Hotkeys [Right Ascention]",
+                                2 => "Hotkeys [Declination]",
+                                _ => "Hotkeys"
+                            }
                     ));
                 f.render_widget(paragraph, chunks[0]);
     
@@ -572,7 +575,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let complete_style = Style::default().fg(Color::Green);
     
                 let header = ["Tx Time", "Size", "ID", "Command", "Data", "", "Rx Time", "Delta Time", "Response"];
-                let rows: Vec<tui::widgets::Row<std::vec::IntoIter<std::string::String>>> = {
+                let rows: Vec<tui::widgets::Row> = {
                     let SPI_guard = SPI.lock().unwrap();
                     SPI_guard.commands
                         .iter()
@@ -581,15 +584,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                         })
                         .map(|i| {
                             if i.0 {
-                                Row::StyledData(i.1.into_iter(), complete_style)
+                                Row::new(i.1.into_iter()).style(complete_style)
                             } else {
-                                Row::StyledData(i.1.into_iter(), incomplete_stye)
+                                Row::new(i.1.into_iter()).style(incomplete_stye)
                             }
                         })
                         .collect()
                 };
     
-                let rows_completed: Vec<tui::widgets::Row<std::vec::IntoIter<std::string::String>>> = {
+                let rows_completed: Vec<tui::widgets::Row> = {
                     let SPI_guard = SPI.lock().unwrap();
                     SPI_guard.completed_commands 
                         .iter()
@@ -598,9 +601,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                         })
                         .map(|i| {
                             if i.0 {
-                                Row::StyledData(i.1.into_iter(), complete_style)
+                                Row::new(i.1.into_iter()).style(complete_style)
                             } else {
-                                Row::StyledData(i.1.into_iter(), incomplete_stye)
+                                Row::new(i.1.into_iter()).style(incomplete_stye)
                             }
                         })
                         .collect()
@@ -609,7 +612,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let mut ts = TableState::default();
                 ts.select(Some(rows.len()));
                 let title = &format!("Unanswered Commands [{}]", rows.len())[..];
-                let t = Table::new(header.iter(), rows.into_iter())
+                let t = Table::new(rows)
+                    .header(Row::new(vec!["Tx Time", "Size", "ID", "Command", "Data", "", "Rx Time", "Delta Time", "Response"]))
                     .block(Block::default().borders(Borders::ALL).title(title))
                     .widths(&[
                         Constraint::Length(20),
@@ -627,8 +631,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let mut ts = TableState::default();
                 ts.select(Some(rows_completed.len()));
                 let title = &format!("Completed Commands [{}]", rows_completed.len())[..];
-                let t = Table::new(header.iter(), rows_completed.into_iter())
+                let t = Table::new(rows_completed)
                     .block(Block::default().borders(Borders::ALL).title(title))
+                    .header(Row::new(vec!["Tx Time", "Size", "ID", "Command", "Data", "", "Rx Time", "Delta Time", "Response"]))
                     .widths(&[
                         Constraint::Length(20),
                         Constraint::Length(6),
@@ -649,18 +654,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                 {
                     let messages_guard = messages.lock().unwrap();
                     let mut state = messages_guard.state.clone();
-                    let logs = messages_guard.items.iter().map(|item| {
-                            Text::styled(
-                                format!("{} {}: {}", item.time.format("%H:%M:%S.%f").to_string(), item.level, item.string),
+                    let logs: Vec<ListItem> = messages_guard.items.iter().map(|item| {
+                            ListItem::new(
+                                format!("{} {}: {}", item.time.format("%H:%M:%S.%f").to_string(), item.level, item.string)
+                            ).style(
                                 match item.level {
                                     MessageLevel::INFO => info_style,
-                                    MessageLevel::CRITICAL => critical_style,
-                                    MessageLevel::ERROR => error_style
-                                },
+                                    MessageLevel::ERROR => error_style,
+                                    MessageLevel::CRITICAL => critical_style
+                                }
                             )
-                        });
+                        }).collect();
     
-                    let logs = List::new(logs).block(Block::default().borders(Borders::ALL).title("Messages"));
+                    let logs = List::new(logs)
+                        .block(Block::default()
+                        .borders(Borders::ALL)
+                        .title("Messages"));
                     f.render_stateful_widget(logs, chunks[3], &mut state);
                 }
             }).unwrap();
