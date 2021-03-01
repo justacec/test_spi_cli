@@ -47,7 +47,7 @@ use time::Duration;
 pub struct SPICommand {
     creation_time: DateTime<Utc>,
     response_time: Option<DateTime<Utc>>,
-    id: u16,
+    id: u32,
     opcode: u16,
     data: Vec<u8>,
     response: Option<Vec<u8>>,
@@ -56,7 +56,7 @@ pub struct SPICommand {
 }
 
 impl SPICommand {
-    fn new(id: u16, opcode: u16, data: Vec<u8>) -> SPICommand {
+    fn new(id: u32, opcode: u16, data: Vec<u8>) -> SPICommand {
         let mut tmp = SPICommand {
             creation_time: Utc::now(),
             response_time: None,
@@ -78,10 +78,10 @@ impl SPICommand {
     }
 
     fn serialize(&self) -> Vec<u8> {
-        let mut ret: Vec<u8> = vec![0u8; 4];
+        let mut ret: Vec<u8> = vec![0u8; 6];
 
-        ret.write_with::<u16>(&mut 0, self.id, LE);
-        ret.write_with::<u16>(&mut 2, self.opcode, LE);
+        ret.write_with::<u32>(&mut 0, self.id, LE);
+        ret.write_with::<u16>(&mut 4, self.opcode, LE);
         ret.extend(self.data.iter().cloned());
 
         ret
@@ -142,6 +142,14 @@ impl SPICommand {
                         .collect::<String>();
 
                     let decode = match self.opcode {
+                        0x0001 => {
+                            let temp = (0_u32 |
+                                ((d[0] as u32) << 0) |
+                                ((d[1] as u32) << 8) |
+                                ((d[2] as u32) << 16) |
+                                ((d[3] as u32) << 24)) as i32;
+                            format!("{:#}", temp).to_string()
+                        },
                         0xFF01 => {
                             let temp = f32::from_bits(0_u32 |
                                 ((d[0] as u32) << 0) |
@@ -306,7 +314,7 @@ impl SPIChannel {
         let spi = self.spidev.clone();
         thread::spawn(move || {
             // Do a 4 byte read from the SPI port
-            let mut incomming_raw= [0u8; 4];
+            let mut incomming_raw= [0u8; 6];
             let mut a = Utc::now();
             {
                 let mut spi_guard = spi.lock().unwrap();
@@ -317,8 +325,8 @@ impl SPIChannel {
             let p1 = b-a;
 
             a = Utc::now();
-            let message_id: u16 = incomming_raw.read_with(&mut 0, LE).unwrap();
-            let message_size: u16 = incomming_raw.read_with(&mut 2, LE).unwrap();
+            let message_id: u32 = incomming_raw.read_with(&mut 0, LE).unwrap();
+            let message_size: u16 = incomming_raw.read_with(&mut 4, LE).unwrap();
 
             // Create a receive buffer
             let mut rx_buf = vec![0_u8; message_size as usize];
@@ -358,7 +366,7 @@ impl SPIChannel {
         self.process_tx();
     }
 
-    fn receive_response(&mut self, id: u16, data: Vec<u8>) {
+    fn receive_response(&mut self, id: u32, data: Vec<u8>) {
         match self.commands.iter().position(|r| r.id == id) {
             Some(index) => {
                 self.commands[index].response_time = Some(Utc::now());
@@ -483,7 +491,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         SPI.lock().unwrap().start_inturrupt();
     }
 
-    let last_command_id = Arc::new(Mutex::new(0u16));
+    let last_command_id = Arc::new(Mutex::new(0u32));
 
     // Code for seperate thread to generate random events
     let random_event_generator_status: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
@@ -513,7 +521,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let data = (0..length).map(|_| {
                         internal_rng.gen_range(0, 255)
                     }).collect();
-                    let cmd_id: u16= {
+                    let cmd_id: u32= {
                         let mut tmp = last_command_id_thread.lock().unwrap();
                         *tmp += 1;
                         *tmp
@@ -572,7 +580,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     true => "Hotkeys [Right Ascention, Silent]",
                                     false => "Hotkeys [Right Ascention, Not Silent]"
                                 },
-                                1 => match *dec_is_silent_2.lock().unwrap() {
+                                2 => match *dec_is_silent_2.lock().unwrap() {
                                     true => "Hotkeys [Declination, Silent]",
                                     false => "Hotkeys [Declination, Not Silent]"
                                 },
@@ -695,7 +703,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // Single echo command
                 Key::Char('<') => {
 
-                    let cmd_id: u16= {
+                    let cmd_id: u32= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
@@ -714,7 +722,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             let data = (0..length).map(|_| {
                                 rng.gen_range(0, 255)
                             }).collect();
-                            let cmd_id: u16= {
+                            let cmd_id: u32= {
                                 let mut tmp = last_command_id.lock().unwrap();
                                 *tmp += 1;
                                 *tmp
@@ -751,7 +759,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
                     *is_silent = !*is_silent;
 
-                    let cmd_id: u16= {
+                    let cmd_id: u32= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
@@ -781,7 +789,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
                     *speed = *speed + 100_f32;
 
-                    let cmd_id: u16= {
+                    let cmd_id: u32= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
@@ -811,7 +819,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     *speed = *speed - 100_f32;
 //                    *speed = f32::max(*speed, 0_f32);
 
-                    let cmd_id: u16= {
+                    let cmd_id: u32= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
@@ -840,7 +848,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // Get Encoder
                 Key::Char('e') => {
 
-                    let cmd_id: u16= {
+                    let cmd_id: u32= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
@@ -854,7 +862,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // Start Motor
                 Key::Char('a') => {
 
-                    let cmd_id: u16= {
+                    let cmd_id: u32= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
@@ -867,7 +875,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // Stop Motor
                 Key::Char('z') => {
 
-                    let cmd_id: u16= {
+                    let cmd_id: u32= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
@@ -880,7 +888,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // Shift +90 Degrees
                 Key::Char('5') => {
 
-                    let cmd_id: u16= {
+                    let cmd_id: u32= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
@@ -897,7 +905,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // Shift -90 Degrees
                 Key::Char('%') => {
 
-                    let cmd_id: u16= {
+                    let cmd_id: u32= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
@@ -911,10 +919,78 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let mut SPI_guard = SPI.lock().unwrap();
                     SPI_guard.send_command(cmd);
                 },  
+                // Shift +45 Degrees
+                Key::Char('4') => {
+
+                    let cmd_id: u32= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let angle = 45.0;
+                    let mut data: Vec<u8> = vec![0;5];
+                    data.write_with::<u8>(&mut 0, *focus_motor.lock().unwrap(), LE).unwrap();
+                    data.write_with::<f32>(&mut 1, angle, LE).unwrap();                    
+                    let cmd = SPICommand::new(cmd_id, 0x0014, data);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },
+                // Shift -45 Degrees
+                Key::Char('$') => {
+
+                    let cmd_id: u32= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let angle = -45.0;
+                    let mut data: Vec<u8> = vec![0;5];
+                    data.write_with::<u8>(&mut 0, *focus_motor.lock().unwrap(), LE).unwrap();
+                    data.write_with::<f32>(&mut 1, angle, LE).unwrap();                    
+                    let cmd = SPICommand::new(cmd_id, 0x0014, data);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },  
+                // Shift +10 Degrees
+                Key::Char('1') => {
+
+                    let cmd_id: u32= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let angle = 10.0;
+                    let mut data: Vec<u8> = vec![0;5];
+                    data.write_with::<u8>(&mut 0, *focus_motor.lock().unwrap(), LE).unwrap();
+                    data.write_with::<f32>(&mut 1, angle, LE).unwrap();                    
+                    let cmd = SPICommand::new(cmd_id, 0x0014, data);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },
+                // Shift -10 Degrees
+                Key::Char('!') => {
+
+                    let cmd_id: u32= {
+                        let mut tmp = last_command_id.lock().unwrap();
+                        *tmp += 1;
+                        *tmp
+                    };
+                    let angle = -10.0;
+                    let mut data: Vec<u8> = vec![0;5];
+                    data.write_with::<u8>(&mut 0, *focus_motor.lock().unwrap(), LE).unwrap();
+                    data.write_with::<f32>(&mut 1, angle, LE).unwrap();                    
+                    let cmd = SPICommand::new(cmd_id, 0x0014, data);
+
+                    let mut SPI_guard = SPI.lock().unwrap();
+                    SPI_guard.send_command(cmd);
+                },  
                 // Get Status
                 Key::Char('s') => {
 
-                    let cmd_id: u16= {
+                    let cmd_id: u32= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
@@ -927,7 +1003,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // Dump Shadow to ITM Port
                 Key::Char('x') => {
 
-                    let cmd_id: u16= {
+                    let cmd_id: u32= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
@@ -940,7 +1016,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // Get Temperture
                 Key::Char('t') => {
 
-                    let cmd_id: u16= {
+                    let cmd_id: u32= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
@@ -953,7 +1029,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // Get Humidity
                 Key::Char('h') => {
 
-                    let cmd_id: u16= {
+                    let cmd_id: u32= {
                         let mut tmp = last_command_id.lock().unwrap();
                         *tmp += 1;
                         *tmp
